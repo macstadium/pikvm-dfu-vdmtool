@@ -5,9 +5,10 @@
 const int usb_pd_int_pin = 7;
 const int debug_led_pin  = 13;
 const int vbus_pin = 4;
+const int button_dfu=9;
+const int button_reboot=8;
 
-#define AUTODFU
-#define DFP
+//#define AUTODFU
 
 // USB-C Specific - TCPM start 1
 const struct tcpc_config_t tcpc_confccig[CONFIG_USB_PD_PORT_COUNT] = {
@@ -17,6 +18,7 @@ const struct tcpc_config_t tcpc_confccig[CONFIG_USB_PD_PORT_COUNT] = {
 int buttonState = 0;
 int buttonStateReboot = 0;
 int led_pin=11;
+
 enum state {
   STATE_INVALID = -1,
   STATE_DISCONNECTED = 0,
@@ -31,15 +33,12 @@ enum state {
 state st = STATE_DISCONNECTED;
 
 #define STATE(x) do { st = STATE_##x; Serial1.print("S: " #x "\n"); } while(0)
-
-void vbus_off(void) {
-  digitalWrite(vbus_pin, LOW);
-#ifdef DFP
-  //delay(800);
-#endif
-  pinMode(vbus_pin, INPUT);
-  Serial1.print("VBUS OFF\n");
-}
+  
+  void vbus_off(void) {
+    digitalWrite(vbus_pin, LOW);
+    pinMode(vbus_pin, INPUT);
+    Serial1.print("VBUS OFF\n");
+  }
 
 void vbus_on(void) {
   Serial1.print("VBUS ON\n");
@@ -103,12 +102,8 @@ void evt_disconnect(void) {
   Serial1.print("Disconnected\n");
   fusb302_pd_reset(0);
   fusb302_tcpm_set_rx_enable(0, 0);
-#ifdef DFP
   fusb302_tcpm_select_rp_value(0, TYPEC_RP_USB);
   fusb302_tcpm_set_cc(0, TYPEC_CC_RP); // DFP mode
-#else
-  fusb302_tcpm_set_cc(0, TYPEC_CC_RD); // UFP mode
-#endif
   STATE(DISCONNECTED);
 }
 
@@ -116,32 +111,26 @@ void send_power_request(uint32_t cap)
 {
   int hdr = PD_HEADER(PD_DATA_REQUEST, 0, 0, 0, 1, PD_REV20, 0);
   uint32_t req =
-    (1L<<28) | // Object position (fixed 5V)
-    (1L<<25) | // USB communications capable
-    (0L<<10) | // 0mA operating
-    (0L<<0); // 0mA max
-
+  (1L<<28) | // Object position (fixed 5V)
+  (1L<<25) | // USB communications capable
+  (0L<<10) | // 0mA operating
+  (0L<<0); // 0mA max
+  
   fusb302_tcpm_transmit(0, TCPC_TX_SOP, hdr, &req);
   Serial1.print(">REQUEST\n");
 }
 
 void send_sink_cap(void)
 {
-#ifdef DFP
   int hdr = PD_HEADER(PD_DATA_SINK_CAP, 1, 1, 0, 1, PD_REV20, 0);
-#else
-  int hdr = PD_HEADER(PD_DATA_SINK_CAP, 0, 0, 0, 1, PD_REV20, 0);
-#endif
   uint32_t cap =
-    (1L<<26) | // USB communications capable
-    (0L<<10) | // 0mA operating
-    (0L<<0); // 0mA max
-
+  (1L<<26) | // USB communications capable
+  (0L<<10) | // 0mA operating
+  (0L<<0); // 0mA max
+  
   fusb302_tcpm_transmit(0, TCPC_TX_SOP, hdr, &cap);
   Serial1.print(">SINK_CAP\n");
-#ifdef DFP
   STATE(READY);
-#endif
 }
 
 int source_cap_timer = 0;
@@ -150,7 +139,7 @@ void send_source_cap(void)
 {
   int hdr = PD_HEADER(PD_DATA_SOURCE_CAP, 1, 1, 0, 1, PD_REV20, 0);
   uint32_t cap = 0x37019096;
-
+  
   fusb302_tcpm_transmit(0, TCPC_TX_SOP, hdr, &cap);
   Serial1.print(">SOURCE_CAP\n");
   source_cap_timer = 0;
@@ -178,7 +167,7 @@ void dump_msg(fusb302_rxfifo_tokens sop, int hdr, uint32_t *msg) {
       Serial1.print("RX ? (");
       break;
   }
-
+  
   Serial1.print(len);
   Serial1.print(") [");
   Serial1.print(hdr, HEX);
@@ -193,31 +182,31 @@ void dump_msg(fusb302_rxfifo_tokens sop, int hdr, uint32_t *msg) {
 void handle_discover_identity(void) {
   int hdr = PD_HEADER(PD_DATA_VENDOR_DEF, 0, 0, 0, 4, PD_REV20, 0);
   uint32_t vdm[4] = {
-      0xff008001L |
-      (1L<<6), // ACK
-
-      (1L<<30) | // USB Device
-      (0L<<27) | // UFP Product Type = Undefined
-      (0L<<26) | // No modal operation
-      (0L<<23) | // DFP Product Type = Undefined
-      0x5acL, // USB VID = Apple
-
-      0L, // XID
-
-      (0x0001L<<16) | // USB PID,
-      0x100L // bcdDevice
+    0xff008001L |
+    (1L<<6), // ACK
+    
+    (1L<<30) | // USB Device
+    (0L<<27) | // UFP Product Type = Undefined
+    (0L<<26) | // No modal operation
+    (0L<<23) | // DFP Product Type = Undefined
+    0x5acL, // USB VID = Apple
+    
+    0L, // XID
+    
+    (0x0001L<<16) | // USB PID,
+    0x100L // bcdDevice
   };
-
+  
   fusb302_tcpm_transmit(0, TCPC_TX_SOP, hdr, vdm);
   Serial1.print(">VDM DISCOVER_IDENTITY\n");
 }
 
 void handle_power_request(uint32_t req) {
   int hdr = PD_HEADER(PD_CTRL_ACCEPT, 1, 1, 0, 0, PD_REV20, 0);
-
+  
   fusb302_tcpm_transmit(0, TCPC_TX_SOP, hdr, NULL);
   Serial1.print(">ACCEPT\n");
-
+  
   STATE(DFP_ACCEPT);
 }
 
@@ -225,16 +214,16 @@ void send_ps_rdy(void) {
   int hdr = PD_HEADER(PD_CTRL_PS_RDY, 1, 1, 0, 0, PD_REV20, 0);
   fusb302_tcpm_transmit(0, TCPC_TX_SOP, hdr, NULL);
   Serial1.print(">PS_RDY\n");
-
+  
   STATE(IDLE);
 }
 
 void send_reject() {
   int hdr = PD_HEADER(PD_CTRL_REJECT, 1, 1, 0, 0, PD_REV20, 0);
-
+  
   fusb302_tcpm_transmit(0, TCPC_TX_SOP, hdr, NULL);
   Serial1.print(">REJECT\n");
-
+  
   STATE(IDLE);
 }
 
@@ -255,7 +244,7 @@ void handle_vdm(fusb302_rxfifo_tokens sop, int hdr, uint32_t *msg) {
 void handle_msg(fusb302_rxfifo_tokens sop, int hdr, uint32_t *msg) {
   int len = PD_HEADER_CNT(hdr);
   int type = PD_HEADER_TYPE(hdr);
-
+  
   if (len != 0) {
     switch (type) {
       case PD_DATA_SOURCE_CAP:
@@ -313,13 +302,13 @@ void evt_packet(void) {
   int hdr, len, ret;
   enum fusb302_rxfifo_tokens sop;
   uint32_t msg[16];
-
+  
   ret = fusb302_tcpm_get_message(0, msg, &hdr, &sop);
   if (ret) {
     // No packet or GoodCRC
     return;
   }
-
+  
   handle_msg(sop, hdr, msg);
 }
 
@@ -327,7 +316,7 @@ void evt_sent(void) {
   switch (st) {
     case STATE_DFP_VBUS_ON:
       STATE(DFP_CONNECTED);
-
+      
       break;
     case STATE_DFP_ACCEPT:
       send_ps_rdy();
@@ -338,7 +327,7 @@ void evt_sent(void) {
 void handle_irq() {
   int irq, irqa, irqb;
   fusb302_get_irq(0, &irq, &irqa, &irqb);
-#if 0
+#if 1
   Serial1.print("IRQ=");
   Serial1.print(irq, HEX);
   Serial1.print(" ");
@@ -346,17 +335,14 @@ void handle_irq() {
   Serial1.print(" ");
   Serial1.print(irqb, HEX);
   Serial1.print("\n");
- #endif
+#endif
 
+  
   if (irq & TCPC_REG_INTERRUPT_VBUSOK) {
     Serial1.print("IRQ: VBUSOK (VBUS=");
     if (fusb302_tcpm_get_vbus_level(0)) {
       Serial1.print("ON)\n");
-#ifdef DFP
       send_source_cap();
-#else
-      evt_connect();
-#endif
     } else {
       Serial1.print("OFF)\n");
       evt_disconnect();
@@ -366,58 +352,36 @@ void handle_irq() {
     Serial1.print("IRQ: HARDRESET\n");
     evt_disconnect();
   }
+  if (irqa & TCPC_REG_INTERRUPTA_RETRYFAIL) {
+    Serial1.print("IRQ: TCPC_REG_INTERRUPTA_RETRYFAIL\n");
+  }
   if (irqa & TCPC_REG_INTERRUPTA_TX_SUCCESS) {
-    //Serial1.print("IRQ: TXSUCCESS\n");
+    Serial1.print("IRQ: TXSUCCESS\n");
     evt_sent();
   }
   if (irqb & TCPC_REG_INTERRUPTB_GCRCSENT) {
-    //Serial1.print("IRQ: GCRCSENT\n");
+    Serial1.print("IRQ: GCRCSENT\n");
     while(!fusb302_rx_fifo_is_empty(0))
       evt_packet();
   }
 }
 
 void enter_dfu() {
-
-//  uint32_t vdm[] = { 0x5ac8010 }; // Get Action List
-//  uint32_t vdm[] = { 0x5ac8012, 0x0105, 0x8002<<16 }; // PMU Reset + DFU Hold
-  //uint32_t vdm[] = { 0x5ac8011, 0x0809  }; // Get Action List
-  //uint32_t vdm[] = { 0x5ac8012, 0x0105, 0x8000<<16 };
-    uint32_t vdm[] = { 0x5AC8012, 0x0106, 0x80010000 };
-    
-  // VDM to mux debug UART over SBU1/2
-//  uint32_t vdm[] = { 0x5AC8012, 0x01840306};
-
-#ifdef DFP
+  
+  uint32_t vdm[] = { 0x5AC8012, 0x0106, 0x80010000 };
+  
   int hdr = PD_HEADER(PD_DATA_VENDOR_DEF, 1, 1, 0, sizeof(vdm) / 4, PD_REV20, 0);
   fusb302_tcpm_transmit(0, TCPC_TX_SOP_DEBUG_PRIME_PRIME, hdr, vdm);
-#else
-  int hdr = PD_HEADER(PD_DATA_VENDOR_DEF, 0, 0, 0, sizeof(vdm) / 4, PD_REV20, 0);
-  fusb302_tcpm_transmit(0, TCPC_TX_SOP_DEBUG_PRIME, hdr, vdm);
-#endif
   Serial1.print(">VDM Serial1 -> SBU1/2\n");
-
+  
 }
 void reboot() {
-
-//  uint32_t vdm[] = { 0x5ac8010 }; // Get Action List
-//  uint32_t vdm[] = { 0x5ac8012, 0x0105, 0x8002<<16 }; // PMU Reset + DFU Hold
-  //uint32_t vdm[] = { 0x5ac8011, 0x0809  }; // Get Action List
-  //uint32_t vdm[] = { 0x5ac8012, 0x0105, 0x8000<<16 };
-    uint32_t vdm[] = { 0x5ac8012, 0x0105, 0x80000000 };
-    
-  // VDM to mux debug UART over SBU1/2
-//  uint32_t vdm[] = { 0x5AC8012, 0x01840306};
-
-#ifdef DFP
+  
+  uint32_t vdm[] = { 0x5ac8012, 0x0105, 0x80000000 };
   int hdr = PD_HEADER(PD_DATA_VENDOR_DEF, 1, 1, 0, sizeof(vdm) / 4, PD_REV20, 0);
   fusb302_tcpm_transmit(0, TCPC_TX_SOP_DEBUG_PRIME_PRIME, hdr, vdm);
-#else
-  int hdr = PD_HEADER(PD_DATA_VENDOR_DEF, 0, 0, 0, sizeof(vdm) / 4, PD_REV20, 0);
-  fusb302_tcpm_transmit(0, TCPC_TX_SOP_DEBUG_PRIME, hdr, vdm);
-#endif
   Serial1.print(">VDM Serial1 -> SBU1/2\n");
-
+  
 }
 int msg_p = 0;
 int std_flag = 0;
@@ -425,53 +389,18 @@ uint32_t msg_buf[32];
 
 void Serial1_handler() {
   while (Serial1.available() > 0) {
-
-    char c = Serial1.read();
-   
     
-    if (c == 0x0d) {
-    Serial1.println("processing");
-#ifdef DFP
-
-      int hdr = PD_HEADER(PD_DATA_VENDOR_DEF, 1, 1, 0, msg_p + 1, PD_REV20, 0);
-#else
-      int hdr = PD_HEADER(PD_DATA_VENDOR_DEF, 0, 0, 0, msg_p + 1, PD_REV20, 0);
-#endif
-      if (std_flag)
-        fusb302_tcpm_transmit(0, TCPC_TX_SOP, hdr, msg_buf);
-      else
-#ifdef DFP
-        fusb302_tcpm_transmit(0, TCPC_TX_SOP_DEBUG_PRIME_PRIME, hdr, msg_buf);
-#else
-        fusb302_tcpm_transmit(0, TCPC_TX_SOP_DEBUG_PRIME, hdr, msg_buf);
-#endif
-      Serial1.print(">VDM");
-      if (!std_flag)
-#if 1
-      for (int i = 0; i <= msg_p; i++) {
-        Serial1.print(" ");
-        Serial1.print(msg_buf[i], HEX);
-      }
-#endif
-      Serial1.print("\n");
-      msg_p = 0;
-      std_flag = 0;
-      msg_buf[msg_p] = 0;
-    } else if (c == 's') {
-      std_flag = 1;
-    } else if (c == ',') {
-      msg_buf[++msg_p] = 0;
-    } else if (c >= '0' && c <= '9') {
-      msg_buf[msg_p] <<= 4;
-      msg_buf[msg_p] |= c - '0';
-    } else if (c >= 'a' && c <= 'f') {
-      msg_buf[msg_p] <<= 4;
-      msg_buf[msg_p] |= c - 'a' + 10;
-    } else if (c >= 'A' && c <= 'F') {
-      msg_buf[msg_p] <<= 4;
-      msg_buf[msg_p] |= c - 'A' + 10;
+    char c = Serial1.read();
+    
+    if (c == 'r') {
+      reboot();
+      
+    }
+    else if (c == 'd') {
+      enter_dfu();
     }
   }
+
 }
 
 int cc_debounce = 0;
@@ -479,7 +408,6 @@ int cc_debounce = 0;
 void state_machine() {
   switch (st) {
     case STATE_DISCONNECTED: {
-#ifdef DFP
       int cc1 = -1, cc2 = -1;
       fusb302_tcpm_get_cc(0, &cc1, &cc2);
       Serial1.print("Poll: cc1=");
@@ -489,8 +417,7 @@ void state_machine() {
       Serial1.print("\n");
       delay(100);
       if (cc1 >= 2 || cc2 >= 2)
-          evt_dfpconnect();
-#endif
+        evt_dfpconnect();
       break;
     }
     case STATE_CONNECTED: {
@@ -509,20 +436,15 @@ void state_machine() {
       break;
     }
     case STATE_READY: {
-      //vdm_fun();
-      #ifdef AUTODFU
+#ifdef AUTODFU
       enter_dfu();
       delay(5000);
-      #endif
-//#ifndef DFP
+#endif
       STATE(IDLE);
-//#endif
       break;
     }
     case STATE_IDLE: {
       Serial1_handler();
-  
-
       break;
     }
     default: {
@@ -531,7 +453,6 @@ void state_machine() {
       Serial1.print("\n");
     }
   }
-#ifdef DFP
   if (st != STATE_DISCONNECTED) {
     int cc1 = -1, cc2 = -1;
     fusb302_tcpm_get_cc(0, &cc1, &cc2);
@@ -549,27 +470,25 @@ void state_machine() {
       cc_debounce = 0;
     }
   }
-#endif
 }
 
 void setup() {
   Serial1.begin(500000);
-
-  
- pinMode(led_pin, OUTPUT);
- pinMode(9, INPUT);
-               pinMode(9, INPUT_PULLUP);
-   pinMode(8, INPUT);
-pinMode(8, INPUT_PULLUP);
+  pinMode(led_pin, OUTPUT);
+  pinMode(button_dfu, INPUT);
+  pinMode(button_dfu, INPUT_PULLUP);
+  pinMode(button_reboot, INPUT);
+  pinMode(button_reboot, INPUT_PULLUP);
   pinMode(usb_pd_int_pin, INPUT);
+  
   digitalWrite(usb_pd_int_pin, HIGH);
   pinMode(debug_led_pin, OUTPUT);
   digitalWrite(debug_led_pin, LOW);
   vbus_off();
-
+  
   Wire.setClock(400000);
   Wire.begin();
-
+  
   int reg;
   tcpc_read(0, TCPC_REG_DEVICE_ID, &reg);
   Serial1.print("Device ID: 0x");
@@ -579,61 +498,59 @@ pinMode(8, INPUT_PULLUP);
     Serial1.print("Invalid device ID. Is the FUSB302 alive?\n");
     while (1);
   }
-
+  
   Serial1.print("Init\n");
   fusb302_tcpm_init(0);
-
+  
   fusb302_pd_reset(0);
   fusb302_tcpm_set_rx_enable(0, 0);
   fusb302_tcpm_set_cc(0, TYPEC_CC_OPEN);
   delay(500);
-
+  
   tcpc_read(0, TCPC_REG_STATUS0, &reg);
   Serial1.print("STATUS0: 0x");
   Serial1.print(reg, HEX);
   Serial1.print("\n");
-
+  
   handle_irq();
-
+  
   evt_disconnect();
 }
 
 void loop() {
-
-  buttonState = digitalRead(9);
-
-if (buttonState == HIGH) {
+  
+  buttonState = digitalRead(button_dfu);
+  
+  if (buttonState == HIGH) {
     // turn LED on:
     digitalWrite(led_pin, HIGH);
   } else {
     // turn LED off:
     digitalWrite(led_pin, LOW);
-        enter_dfu();
+    enter_dfu();
     delay(500);
-
-  
   }
-
-    buttonStateReboot = digitalRead(8);
-
-if (buttonStateReboot == HIGH) {
+  
+  buttonStateReboot = digitalRead(button_reboot);
+  
+  if (buttonStateReboot == HIGH) {
     // turn LED on:
     digitalWrite(led_pin, HIGH);
   } else {
     // turn LED off:
     digitalWrite(led_pin, LOW);
-        reboot();
+    reboot();
     delay(500);
-
-  
+    
+    
   }
   
   if (LOW == digitalRead(usb_pd_int_pin)) {
-      handle_irq();
+    handle_irq();
   }
-  Serial.println("callling state machine");
+  Serial.println("calling state machine");
   state_machine();
-    Serial.println("done");
-
+  Serial.println("done");
+  
   delay(4);
 }
