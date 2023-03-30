@@ -9,7 +9,7 @@ function makeproject () {
 	github_account="$1"
 	proj="$2"
 	branch="$3"
-	url="https://github.com/${github_account}/${proj}.git"  $branch
+	url="https://github.com/${github_account}/${proj}.git"
 	echo "cloning $url"
 	
 	git clone "${url}"
